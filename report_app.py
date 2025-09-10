@@ -47,8 +47,8 @@ st.markdown("""
 <style>
 #made-by-badge{
   position: fixed;
-  top: 10px; right: 110px;          /* sit under the toolbar */
-  right: 16px;
+  top: 10px; 
+  right: 110px;          /* sit under the toolbar */
   background: rgba(0,0,0,.65);
   color: #fff;
   padding: 6px 12px;
@@ -385,6 +385,7 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
 
