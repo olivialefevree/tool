@@ -48,7 +48,7 @@ st.markdown("""
 <style>
 #center-top-badge{
   position: fixed;
-  top: 56px;          /* if it overlaps, try 48–64px */
+  top: 64px;          /* if it overlaps, try 48–64px */
   left: 0;
   right: 0;
   display: flex;
@@ -392,6 +392,7 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
 
