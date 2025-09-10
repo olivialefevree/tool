@@ -14,7 +14,7 @@ CLIENTS_SHEET = "Clients"                                   # clients tab
 APP_TITLE = "Team Orders – Reports"
 EXPECTED_HEADER = ["Timestamp","User","Client","OrderID","Amount","OrderDate"]
 
-# Accounts (display names in NAMES; usernames in USERNAMES)
+# Accounts
 NAMES      = ["Jerry", "Wolf 1", "Wolf 2", "Wolf 3", "Wolf 8", "Wolf 9", "King 3"]
 USERNAMES  = ["jerry", "wolf1", "wolf2", "wolf3", "wolf8", "wolf9", "king3"]
 PASSWORDS  = [
@@ -31,7 +31,7 @@ ROLES = { "jerry":"admin", "wolf1":"team", "wolf2":"team", "wolf3":"team",
 
 # Persistent login cookie
 COOKIE_NAME = "orders_auth_v2"
-COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE this to a long random string
+COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE to a long random string
 COOKIE_EXPIRY_DAYS = 180
 SESSION_TOKEN_KEY = "auth_token"  # session key for instant routing after login
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,19 +62,27 @@ def verify_token(token_b64: str):
     except Exception:
         return None
 
-cookie_manager = stx.CookieManager()
-_ = cookie_manager.get_all()  # initialize component on first render
+cookie_manager = stx.CookieManager(key="cookie-manager")
 
 def set_cookie(value: str):
-    cookie_manager.set(COOKIE_NAME, value, max_age=COOKIE_EXPIRY_DAYS*24*3600, key=COOKIE_NAME)
+    # make it first-party, long-lived, and available on all paths
+    cookie_manager.set(
+        COOKIE_NAME, value,
+        max_age=COOKIE_EXPIRY_DAYS*24*3600,
+        path="/", same_site="Lax", secure=False, key=COOKIE_NAME
+    )
 
-def get_cookie():
-    return cookie_manager.get(COOKIE_NAME)
+def get_cookie_safely():
+    # IMPORTANT: get_all() returns None on first render; stop once to allow JS to load cookies
+    cookies = cookie_manager.get_all()
+    if cookies is None:
+        st.stop()  # next run will have the cookies
+    return cookies.get(COOKIE_NAME)
 
 def clear_cookie():
-    # expire instead of delete (avoids KeyError in the library)
+    # expire instead of delete to avoid KeyError in the component
     try:
-        cookie_manager.set(COOKIE_NAME, "", max_age=0, key=COOKIE_NAME)
+        cookie_manager.set(COOKIE_NAME, "", max_age=0, path="/", key=COOKIE_NAME)
     except Exception:
         pass
 
@@ -315,8 +323,11 @@ def render_logout_panel(display_name):
         st.rerun()
 
 def main_router():
-    # Prefer session token (immediate after login), else cookie (returning visits)
-    token = st.session_state.get(SESSION_TOKEN_KEY) or get_cookie()
+    # 1) Prefer session token (immediate right after login)
+    token = st.session_state.get(SESSION_TOKEN_KEY)
+    # 2) Otherwise read cookie; wait one render until cookies are available
+    if not token:
+        token = get_cookie_safely()
     user = verify_token(token) if token else None
 
     if user is None:
