@@ -177,19 +177,23 @@ def manager_dashboard():
         st.info("No reports yet.")
         return
 
+    # ── Filters ───────────────────────────────────────────────
     with st.expander("Filters", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         users = ["(All)"] + sorted(df["User"].dropna().unique().tolist())
         team_members = ["(All)"] + sorted(df["TeamMember"].dropna().unique().tolist())
         selected_user = c1.selectbox("Filter by Username", users)
-        selected_tm = c2.selectbox("Filter by Team Member", team_members)
-        date_from = c3.date_input("From", value=None)
-        date_to = c4.date_input("To", value=None)
-        with st.expander("Admin tools"):
-    if st.button("Fix header (overwrite row 1)"):
-        fix_header()
-        st.success("Header fixed. Reloading…")
-        st.rerun()
+        selected_tm   = c2.selectbox("Filter by Team Member", team_members)
+        date_from     = c3.date_input("From", value=None)
+        date_to       = c4.date_input("To", value=None)
+
+    # ── Admin tools (separate expander, not nested) ───────────
+    with st.expander("Admin tools"):
+        if st.button("Fix header (overwrite row 1)"):
+            fix_header()
+            st.success("Header fixed. Reloading…")
+            st.rerun()
+
 
 
     f = df.copy()
@@ -232,4 +236,5 @@ if role == "admin":
     manager_dashboard()
 else:
     team_reporter(username)
+
 
