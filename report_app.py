@@ -2,23 +2,19 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, date
-import json
-import streamlit_authenticator as stauth
+from datetime import datetime, date, timedelta, timezone
+import json, hmac, hashlib, base64
+import extra_streamlit_components as stx
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG: your Google Sheet
+# CONFIG
 SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # your sheet ID
-ORDERS_SHEET = "Sheet1"                                     # tab for orders
-CLIENTS_SHEET = "Clients"                                   # tab for client list
+ORDERS_SHEET = "Sheet1"                                     # orders tab
+CLIENTS_SHEET = "Clients"                                   # clients tab
 APP_TITLE = "Team Orders – Reports"
 EXPECTED_HEADER = ["Timestamp","User","Client","OrderID","Amount","OrderDate"]
-# ─────────────────────────────────────────────────────────────────────────────
 
-st.set_page_config(page_title=APP_TITLE, layout="wide")
-
-# ------------------------- Auth & Users -------------------------
-# Accounts: Jerry (admin), Wolf 1/2/3/8/9, King 3
+# Accounts
 NAMES      = ["Jerry", "Wolf 1", "Wolf 2", "Wolf 3", "Wolf 8", "Wolf 9", "King 3"]
 USERNAMES  = ["jerry", "wolf1", "wolf2", "wolf3", "wolf8", "wolf9", "king3"]
 PASSWORDS  = [
@@ -30,20 +26,54 @@ PASSWORDS  = [
     "mN5#cR8&d4",    # wolf9
     "zT6*Ya3@e9",    # king3
 ]
-ROLES = {
-    "jerry": "admin",
-    "wolf1": "team",
-    "wolf2": "team",
-    "wolf3": "team",
-    "wolf8": "team",
-    "wolf9": "team",
-    "king3": "team",
-}
+ROLES = { "jerry":"admin", "wolf1":"team", "wolf2":"team", "wolf3":"team",
+          "wolf8":"team", "wolf9":"team", "king3":"team" }
 
-# Cookies (persistent login)
+# Persistent cookie
 COOKIE_NAME = "orders_auth_v2"
-COOKIE_KEY  = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"   # change to a long random string
+# CHANGE THIS to a long random string (e.g., from: python -c "import secrets; print(secrets.token_urlsafe(32))")
+COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"
 COOKIE_EXPIRY_DAYS = 180
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+
+# --------------------- Cookie helpers --------------------------
+def _sign(s: str) -> str:
+    return hmac.new(COOKIE_SECRET.encode("utf-8"), s.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def issue_token(username: str, name: str) -> str:
+    # expiry as unix seconds
+    exp = int((datetime.now(timezone.utc) + timedelta(days=COOKIE_EXPIRY_DAYS)).timestamp())
+    payload = f"{username}|{name}|{exp}"
+    sig = _sign(payload)
+    token = f"{payload}|{sig}"
+    return base64.urlsafe_b64encode(token.encode("utf-8")).decode("utf-8")
+
+def verify_token(token_b64: str):
+    try:
+        token = base64.urlsafe_b64decode(token_b64.encode("utf-8")).decode("utf-8")
+        username, name, exp_str, sig = token.split("|", 3)
+        payload = f"{username}|{name}|{exp_str}"
+        if not hmac.compare_digest(sig, _sign(payload)):
+            return None
+        if int(exp_str) < int(datetime.now(timezone.utc).timestamp()):
+            return None
+        return {"username": username, "name": name}
+    except Exception:
+        return None
+
+cookie_manager = stx.CookieManager()
+
+def set_cookie(value: str):
+    # max_age in seconds
+    cookie_manager.set(COOKIE_NAME, value, max_age=COOKIE_EXPIRY_DAYS*24*3600, key=COOKIE_NAME)
+
+def get_cookie():
+    return cookie_manager.get(COOKIE_NAME)
+
+def clear_cookie():
+    cookie_manager.delete(COOKIE_NAME)
 
 # --------------------- Google Sheets helpers -------------------
 def _load_service_account_from_secrets():
@@ -54,10 +84,8 @@ def _load_service_account_from_secrets():
     return dict(raw)
 
 def _gs_client():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    scope = ["https://spreadsheets.google.com/feeds",
+             "https://www.googleapis.com/auth/drive"]
     svc = _load_service_account_from_secrets()
     creds = ServiceAccountCredentials.from_json_keyfile_dict(svc, scope)
     return gspread.authorize(creds)
@@ -91,7 +119,7 @@ def get_clients_ws():
 @st.cache_data(ttl=30)
 def load_orders_df() -> pd.DataFrame:
     ws = get_orders_ws()
-    records = ws.get_all_records()  # first row as header
+    records = ws.get_all_records()
     df = pd.DataFrame(records)
     if df.empty:
         df = pd.DataFrame(columns=EXPECTED_HEADER)
@@ -140,12 +168,12 @@ def fix_orders_header():
     ws.update("A1:F1", [EXPECTED_HEADER])
 
 # --------------------------- UI: Team ---------------------------
-def team_reporter(username):
+def team_reporter(username_display):
     st.title("📝 Team Reporter")
-    st.caption(f"Logged in as **{username}**")
+    st.caption(f"Logged in as **{username_display}**")
 
     clients_df = load_clients_df()
-    my_clients = sorted(clients_df[clients_df["User"] == username]["Client"].dropna().unique().tolist())
+    my_clients = sorted(clients_df[clients_df["User"] == username_display]["Client"].dropna().unique().tolist())
 
     with st.expander("My clients"):
         c1, c2 = st.columns([2,1])
@@ -153,7 +181,7 @@ def team_reporter(username):
             new_client = st.text_input("Add new client")
         with c2:
             if st.button("➕ Add client"):
-                add_client(username, new_client)
+                add_client(username_display, new_client)
                 load_clients_df.clear()
                 st.success(f"Added client: {new_client}")
                 st.rerun()
@@ -164,7 +192,7 @@ def team_reporter(username):
                 client_to_delete = st.selectbox("Delete one of my clients", my_clients)
             with del_col2:
                 if st.button("🗑️ Delete selected"):
-                    delete_client(username, client_to_delete)
+                    delete_client(username_display, client_to_delete)
                     load_clients_df.clear()
                     st.success(f"Deleted client: {client_to_delete}")
                     st.rerun()
@@ -189,7 +217,7 @@ def team_reporter(username):
             st.error("Order ID is required.")
         else:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            new_row = [ts, username, client, order_id.strip(), float(amount), order_date.strftime("%Y-%m-%d")]
+            new_row = [ts, username_display, client, order_id.strip(), float(amount), order_date.strftime("%Y-%m-%d")]
             try:
                 append_order_row(new_row)
                 load_orders_df.clear()
@@ -201,7 +229,7 @@ def team_reporter(username):
     st.divider()
     st.subheader("My recent submissions")
     df = load_orders_df()
-    mine = df[df["User"] == username].sort_values("Timestamp", ascending=False).head(100)
+    mine = df[df["User"] == username_display].sort_values("Timestamp", ascending=False).head(100)
     st.dataframe(mine, use_container_width=True)
 
 # ------------------------- UI: Dashboard ------------------------
@@ -260,42 +288,44 @@ def manager_dashboard():
     st.download_button("⬇ Download CSV", f.to_csv(index=False).encode("utf-8"),
                        "all_orders.csv", "text/csv")
 
-# --------------------------- Auth (persistent) ------------------
-def run_app():
-    # Hash passwords (runtime is fine for an internal tool)
-    try:
-        hashed_passwords = stauth.Hasher(PASSWORDS).generate()
-    except Exception as e:
-        st.error("Password hashing failed. Check Python version and requirements.")
+# --------------------------- Auth + Router ----------------------
+def render_login():
+    st.sidebar.header("Login")
+    username = st.sidebar.selectbox("User", USERNAMES, format_func=lambda u: NAMES[USERNAMES.index(u)])
+    password = st.sidebar.text_input("Password", type="password")
+    if st.sidebar.button("Login"):
+        idx = USERNAMES.index(username)
+        if PASSWORDS[idx] == password:
+            token = issue_token(username, NAMES[idx])
+            set_cookie(token)
+            st.rerun()
+        else:
+            st.sidebar.error("Invalid username or password")
+
+def render_logout_panel(display_name):
+    st.sidebar.success(f"Logged in as {display_name}")
+    if st.sidebar.button("Logout"):
+        clear_cookie()
+        st.rerun()
+
+def main_router():
+    # Try cookie
+    token = get_cookie()
+    user = verify_token(token) if token else None
+
+    if user is None:
+        render_login()
         st.stop()
-
-
-    authenticator = stauth.Authenticate(
-        NAMES, USERNAMES, hashed_passwords,
-        COOKIE_NAME, COOKIE_KEY, cookie_expiry_days=COOKIE_EXPIRY_DAYS
-    )
-
-    # Sidebar login; cookie keeps users logged in across sessions
-    name, auth_status, username = authenticator.login("Login", "sidebar")
-
-    if auth_status is False:
-        st.sidebar.error("Invalid username or password")
-        st.stop()
-    if auth_status is None:
-        st.stop()
-
-    # Show logout in sidebar
-    authenticator.logout("Logout", "sidebar")
-
-    # Route by role
-    role = ROLES.get(username, "team")
-    if role == "admin":
-        manager_dashboard()
     else:
-        team_reporter(username)
+        # show logout on sidebar
+        render_logout_panel(user["name"])
+        # route
+        if ROLES.get(user["username"]) == "admin":
+            manager_dashboard()
+        else:
+            # use display name (e.g., "Wolf 1") for Orders "User" column and client ownership
+            team_reporter(user["name"])
 
 # --------------------------- Main -------------------------------
 if __name__ == "__main__":
-    run_app()
-
-
+    main_router()
