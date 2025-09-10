@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, date, timedelta, timezone
 import json, hmac, hashlib, base64
 import extra_streamlit_components as stx
+import time
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
@@ -34,7 +35,7 @@ COOKIE_NAME = "orders_auth_v2"
 COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE to a long random string and keep it stable
 COOKIE_EXPIRY_DAYS = 180
 SESSION_TOKEN_KEY = "auth_token"         # for instant routing after login
-POST_LOGOUT_FLAG  = "__just_logged_out"  # to ignore cookie for one render after logout
+POST_LOGOUT_FLAG  = "__just_logged_out"  # ignore cookie until it's gone
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -66,11 +67,24 @@ def verify_token(token_b64: str):
 cookie_manager = stx.CookieManager(key="cookie-manager")
 
 def set_cookie(value: str):
+    # write the cookie (HTTPS on Streamlit Cloud ⇒ secure=True)
     cookie_manager.set(
         COOKIE_NAME, value,
         max_age=COOKIE_EXPIRY_DAYS * 24 * 3600,
         path="/", same_site="Lax", secure=True, key=f"set-{COOKIE_NAME}"
     )
+
+def clear_cookie():
+    # expire the cookie (both max_age and an old expiry to be safe)
+    try:
+        cookie_manager.set(
+            COOKIE_NAME, "",
+            max_age=0, path="/", same_site="Lax", secure=True, key=f"clr-{COOKIE_NAME}"
+        )
+        # tiny pause gives the browser time to process
+        time.sleep(0.05)
+    except Exception:
+        pass
 
 def get_cookies_now():
     return cookie_manager.get_all()  # can be None on first render
@@ -78,17 +92,8 @@ def get_cookies_now():
 def get_cookie_value_or_wait():
     cookies = get_cookies_now()
     if cookies is None:
-        st.stop()  # allow cookie component to initialize; next run will have cookies
+        st.stop()  # let the component initialize; next run will have cookies
     return cookies.get(COOKIE_NAME)
-
-def clear_cookie():
-    try:
-        cookie_manager.set(
-            COOKIE_NAME, "", max_age=0,
-            path="/", same_site="Lax", secure=True, key=f"clr-{COOKIE_NAME}"
-        )
-    except Exception:
-        pass
 
 # --------------------- Google Sheets helpers -------------------
 def _load_service_account_from_secrets():
@@ -313,7 +318,7 @@ def render_login():
         idx = USERNAMES.index(username)
         if PASSWORDS[idx] == password:
             token = issue_token(username, NAMES[idx])
-            st.session_state[SESSION_TOKEN_KEY] = token  # write cookie after rerun in router
+            st.session_state[SESSION_TOKEN_KEY] = token  # cookie will be written by router after rerun
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
@@ -321,42 +326,60 @@ def render_login():
 def render_logout_panel(display_name):
     st.sidebar.success(f"Logged in as {display_name}")
     if st.sidebar.button("Logout", key="logout_btn"):
-        # mark logout, clear session token, and rerun; router will ignore cookie once and re-clear
+        # start a logout cycle that ignores cookies until they disappear
         st.session_state[POST_LOGOUT_FLAG] = True
         st.session_state.pop(SESSION_TOKEN_KEY, None)
         clear_cookie()
         st.rerun()
 
+# Debug panel (you can remove later)
+def debug_panel():
+    with st.sidebar.expander("🔎 Cookie debug"):
+        cookies = get_cookies_now() or {}
+        st.write("All cookies:", cookies)
+        st.write("Has auth cookie:", bool(cookies.get(COOKIE_NAME)))
+        st.write("POST_LOGOUT_FLAG:", bool(st.session_state.get(POST_LOGOUT_FLAG)))
+        st.write("SESSION_TOKEN present:", bool(st.session_state.get(SESSION_TOKEN_KEY)))
+
 def main_router():
-    # If we JUST logged out, ignore any cookie for one run and ensure it’s cleared
+    debug_panel()  # comment this out if you don't want to see cookies
+
+    # If we JUST logged out, keep clearing + ignore cookie until it's actually gone
     if st.session_state.get(POST_LOGOUT_FLAG):
-        clear_cookie()
+        cookies = get_cookies_now()
+        if cookies is None:
+            st.stop()
+        if cookies.get(COOKIE_NAME):
+            clear_cookie()
+            st.info("Logging out…")
+            st.stop()   # wait for browser to drop the cookie
+        # cookie is gone now → end logout mode
         st.session_state.pop(POST_LOGOUT_FLAG, None)
         render_login()
         st.stop()
 
-    # If we have a session token (fresh login), ensure a cookie exists
+    # Fresh login this session: write cookie once and route
     session_token = st.session_state.get(SESSION_TOKEN_KEY)
     if session_token:
         cookies = get_cookies_now()
         if cookies is None:
-            st.stop()  # wait for cookie component
+            st.stop()
         if COOKIE_NAME not in cookies:
-            set_cookie(session_token)  # write cookie now (after rerun cycle)
-            st.stop()                  # pause once so browser stores it
+            set_cookie(session_token)
+            st.stop()  # let browser persist it
         user = verify_token(session_token)
         if user:
             render_logout_panel(user["name"])
             return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
 
-    # Otherwise, use the cookie (returning visits)
+    # Returning visit: use cookie
     token_from_cookie = get_cookie_value_or_wait()
     user = verify_token(token_from_cookie) if token_from_cookie else None
     if user:
         render_logout_panel(user["name"])
         return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
 
-    # No valid session/cookie → show login
+    # No session or valid cookie → show login
     render_login()
     st.stop()
 
