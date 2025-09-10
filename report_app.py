@@ -1,8 +1,16 @@
+# Create an updated version of the app that fixes the rerun issue and makes secrets parsing robust.
+import os, zipfile, json, textwrap, pathlib
+
+base = "/mnt/data/streamlit-report-tool-v2"
+os.makedirs(base, exist_ok=True)
+
+report_app_py = r'''
 import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, date
+import json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG: your Google Sheet
@@ -44,15 +52,30 @@ def logout_button():
         st.rerun()
 
 # --------------------- Google Sheets Client ---------------------
+def _load_service_account_from_secrets():
+    """
+    Support both TOML-table and JSON-string secrets formats:
+      - TOML table:
+          [gcp_service_account]
+          type="service_account"
+          ...
+          then st.secrets["gcp_service_account"] -> dict
+      - JSON string:
+          gcp_service_account = "{ ... }"
+          then st.secrets["gcp_service_account"] -> str
+    """
+    raw = st.secrets["gcp_service_account"]
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return dict(raw)
+
 def get_gsheet():
     """Authorize via Streamlit Secrets and return a gspread Worksheet."""
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
-
-    # Expecting secrets as a TOML table: [gcp_service_account] ...fields...
-    svc_info = dict(st.secrets["gcp_service_account"])
+    svc_info = _load_service_account_from_secrets()
     creds = ServiceAccountCredentials.from_json_keyfile_dict(svc_info, scope)
     client = gspread.authorize(creds)
 
@@ -71,7 +94,6 @@ def get_gsheet():
         first_row = ws.row_values(1)
         if first_row != header:
             st.warning("Sheet header differs. Expected: " + ", ".join(header))
-
     return ws
 
 @st.cache_data(ttl=30)
@@ -120,7 +142,7 @@ def team_reporter(username):
         try:
             append_row(new_row)
             st.success("✅ Order submitted.")
-            st.experimental_rerun()
+            st.rerun()  # fix: use st.rerun (experimental_rerun removed)
         except Exception as e:
             st.error(f"Failed to submit: {e}")
 
@@ -194,3 +216,21 @@ if role == "admin":
     manager_dashboard()
 else:
     team_reporter(username)
+'''
+open(os.path.join(base, "report_app.py"), "w", encoding="utf-8").write(report_app_py)
+
+requirements_txt = """\
+streamlit
+pandas
+gspread
+oauth2client
+"""
+open(os.path.join(base, "requirements.txt"), "w", encoding="utf-8").write(requirements_txt)
+
+zip_path = "/mnt/data/streamlit-report-tool-v2.zip"
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    zf.write(os.path.join(base, "report_app.py"), arcname="report_app.py")
+    zf.write(os.path.join(base, "requirements.txt"), arcname="requirements.txt")
+
+zip_path
+
