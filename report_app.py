@@ -63,7 +63,7 @@ def verify_token(token_b64: str):
         return None
 
 cookie_manager = stx.CookieManager()
-_ = cookie_manager.get_all()  # ensure cookie component is ready on first render
+_ = cookie_manager.get_all()  # initialize component on first render
 
 def set_cookie(value: str):
     cookie_manager.set(COOKIE_NAME, value, max_age=COOKIE_EXPIRY_DAYS*24*3600, key=COOKIE_NAME)
@@ -72,11 +72,14 @@ def get_cookie():
     return cookie_manager.get(COOKIE_NAME)
 
 def clear_cookie():
-    cookie_manager.delete(COOKIE_NAME)
+    # expire instead of delete (avoids KeyError in the library)
+    try:
+        cookie_manager.set(COOKIE_NAME, "", max_age=0, key=COOKIE_NAME)
+    except Exception:
+        pass
 
 # --------------------- Google Sheets helpers -------------------
 def _load_service_account_from_secrets():
-    """Support TOML-table or JSON-string secrets."""
     raw = st.secrets["gcp_service_account"]
     if isinstance(raw, str):
         return json.loads(raw)
@@ -324,10 +327,9 @@ def main_router():
         if ROLES.get(user["username"]) == "admin":
             manager_dashboard()
         else:
-            # Use display name for ownership & Orders "User" column
             team_reporter(user["name"])
 
 # --------------------------- Main -------------------------------
 if __name__ == "__main__":
-    st.title(APP_TITLE)  # small top title for unauthenticated users too
+    st.title(APP_TITLE)
     main_router()
