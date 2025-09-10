@@ -43,28 +43,35 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 # --------------------- Token + cookie helpers ------------------
 # Badge in the top-right corner
 # Top-right badge (below Streamlit toolbar)
+# Centered top badge (below the Streamlit toolbar)
 st.markdown("""
 <style>
-#made-by-badge{
+#center-top-badge{
   position: fixed;
-  top: 10px; 
-  right: 110px;          /* sit under the toolbar */
+  top: 56px;          /* if it overlaps, try 48–64px */
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;   /* center horizontally */
+  z-index: 99999;            /* above app content */
+  pointer-events: none;      /* clicks pass through */
+}
+#center-top-badge > span{
   background: rgba(0,0,0,.65);
   color: #fff;
   padding: 6px 12px;
   border-radius: 12px;
   font-size: 12px;
   line-height: 1;
-  z-index: 99999;       /* above app content */
-  pointer-events: none; /* let clicks pass through */
   backdrop-filter: blur(2px);
 }
 @media (max-width: 640px){
-  #made-by-badge{ top: 64px; right: 12px; font-size: 11px; }
+  #center-top-badge{ top: 64px; }
 }
 </style>
-<div id="made-by-badge">Made by 战狼 - Jerry</div>
+<div id="center-top-badge"><span>Made by 战狼 - Jerry</span></div>
 """, unsafe_allow_html=True)
+
 
 
 def _sign(s: str) -> str:
@@ -385,6 +392,7 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
 
