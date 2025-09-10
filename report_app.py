@@ -31,9 +31,9 @@ ROLES = { "jerry":"admin", "wolf1":"team", "wolf2":"team", "wolf3":"team",
 
 # Persistent login cookie
 COOKIE_NAME = "orders_auth_v2"
-COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE to a long random string
+COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE to a long random string and keep it stable
 COOKIE_EXPIRY_DAYS = 180
-SESSION_TOKEN_KEY = "auth_token"  # session key for instant routing after login
+SESSION_TOKEN_KEY = "auth_token"     # session token for immediate routing
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -65,24 +65,28 @@ def verify_token(token_b64: str):
 cookie_manager = stx.CookieManager(key="cookie-manager")
 
 def set_cookie(value: str):
-    # make it first-party, long-lived, and available on all paths
+    # HTTPS on Streamlit Cloud → secure=True
     cookie_manager.set(
         COOKIE_NAME, value,
-        max_age=COOKIE_EXPIRY_DAYS*24*3600,
-        path="/", same_site="Lax", secure=False, key=COOKIE_NAME
+        max_age=COOKIE_EXPIRY_DAYS * 24 * 3600,
+        path="/", same_site="Lax", secure=True, key=f"set-{COOKIE_NAME}"
     )
 
-def get_cookie_safely():
-    # IMPORTANT: get_all() returns None on first render; stop once to allow JS to load cookies
-    cookies = cookie_manager.get_all()
+def get_cookie_now():
+    # Returns cookies dict or None on very first render
+    return cookie_manager.get_all()
+
+def get_cookie_value():
+    cookies = get_cookie_now()
     if cookies is None:
-        st.stop()  # next run will have the cookies
+        st.stop()  # allow component JS to load cookies; next run cookies will be available
     return cookies.get(COOKIE_NAME)
 
 def clear_cookie():
-    # expire instead of delete to avoid KeyError in the component
     try:
-        cookie_manager.set(COOKIE_NAME, "", max_age=0, path="/", key=COOKIE_NAME)
+        cookie_manager.set(
+            COOKIE_NAME, "", max_age=0, path="/", same_site="Lax", secure=True, key=f"clr-{COOKIE_NAME}"
+        )
     except Exception:
         pass
 
@@ -309,8 +313,9 @@ def render_login():
         idx = USERNAMES.index(username)
         if PASSWORDS[idx] == password:
             token = issue_token(username, NAMES[idx])
-            set_cookie(token)                               # for future visits
-            st.session_state[SESSION_TOKEN_KEY] = token     # for immediate route now
+            # Do NOT set the cookie right before rerun (browser won’t have time).
+            # Instead: keep token in session; router will write the cookie after rerun.
+            st.session_state[SESSION_TOKEN_KEY] = token
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
@@ -323,22 +328,30 @@ def render_logout_panel(display_name):
         st.rerun()
 
 def main_router():
-    # 1) Prefer session token (immediate right after login)
-    token = st.session_state.get(SESSION_TOKEN_KEY)
-    # 2) Otherwise read cookie; wait one render until cookies are available
-    if not token:
-        token = get_cookie_safely()
-    user = verify_token(token) if token else None
+    # 1) If we have a session token (user just logged in, or same tab), ensure cookie exists.
+    session_token = st.session_state.get(SESSION_TOKEN_KEY)
+    if session_token:
+        cookies = get_cookie_now()
+        if cookies is None:
+            st.stop()  # wait one render for cookies API
+        if COOKIE_NAME not in cookies:
+            set_cookie(session_token)  # write cookie AFTER rerun cycle
+            st.stop()                  # pause once so browser stores it
+        user = verify_token(session_token)
+        if user:
+            render_logout_panel(user["name"])
+            return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
 
-    if user is None:
-        render_login()
-        st.stop()
-    else:
+    # 2) Otherwise, rely on cookie for returning visits
+    token_from_cookie = get_cookie_value()
+    user = verify_token(token_from_cookie) if token_from_cookie else None
+    if user:
         render_logout_panel(user["name"])
-        if ROLES.get(user["username"]) == "admin":
-            manager_dashboard()
-        else:
-            team_reporter(user["name"])
+        return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
+
+    # 3) No valid session/cookie → show login
+    render_login()
+    st.stop()
 
 # --------------------------- Main -------------------------------
 if __name__ == "__main__":
