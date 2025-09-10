@@ -8,13 +8,13 @@ import extra_streamlit_components as stx
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
-SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # your sheet ID
+SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # your Google Sheet ID
 ORDERS_SHEET = "Sheet1"                                     # orders tab
 CLIENTS_SHEET = "Clients"                                   # clients tab
 APP_TITLE = "Team Orders – Reports"
 EXPECTED_HEADER = ["Timestamp","User","Client","OrderID","Amount","OrderDate"]
 
-# Accounts
+# Accounts (display names in NAMES; usernames in USERNAMES)
 NAMES      = ["Jerry", "Wolf 1", "Wolf 2", "Wolf 3", "Wolf 8", "Wolf 9", "King 3"]
 USERNAMES  = ["jerry", "wolf1", "wolf2", "wolf3", "wolf8", "wolf9", "king3"]
 PASSWORDS  = [
@@ -29,11 +29,11 @@ PASSWORDS  = [
 ROLES = { "jerry":"admin", "wolf1":"team", "wolf2":"team", "wolf3":"team",
           "wolf8":"team", "wolf9":"team", "king3":"team" }
 
-# Persistent cookie
+# Persistent login cookie
 COOKIE_NAME = "orders_auth_v2"
-# CHANGE THIS to a long random string (e.g., from: python -c "import secrets; print(secrets.token_urlsafe(32))")
-COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"
+COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE this to a long random string
 COOKIE_EXPIRY_DAYS = 180
+SESSION_TOKEN_KEY = "auth_token"  # session key for instant routing after login
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -43,7 +43,6 @@ def _sign(s: str) -> str:
     return hmac.new(COOKIE_SECRET.encode("utf-8"), s.encode("utf-8"), hashlib.sha256).hexdigest()
 
 def issue_token(username: str, name: str) -> str:
-    # expiry as unix seconds
     exp = int((datetime.now(timezone.utc) + timedelta(days=COOKIE_EXPIRY_DAYS)).timestamp())
     payload = f"{username}|{name}|{exp}"
     sig = _sign(payload)
@@ -64,9 +63,9 @@ def verify_token(token_b64: str):
         return None
 
 cookie_manager = stx.CookieManager()
+_ = cookie_manager.get_all()  # ensure cookie component is ready on first render
 
 def set_cookie(value: str):
-    # max_age in seconds
     cookie_manager.set(COOKIE_NAME, value, max_age=COOKIE_EXPIRY_DAYS*24*3600, key=COOKIE_NAME)
 
 def get_cookie():
@@ -173,7 +172,9 @@ def team_reporter(username_display):
     st.caption(f"Logged in as **{username_display}**")
 
     clients_df = load_clients_df()
-    my_clients = sorted(clients_df[clients_df["User"] == username_display]["Client"].dropna().unique().tolist())
+    my_clients = sorted(
+        clients_df[clients_df["User"] == username_display]["Client"].dropna().unique().tolist()
+    )
 
     with st.expander("My clients"):
         c1, c2 = st.columns([2,1])
@@ -293,39 +294,40 @@ def render_login():
     st.sidebar.header("Login")
     username = st.sidebar.selectbox("User", USERNAMES, format_func=lambda u: NAMES[USERNAMES.index(u)])
     password = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Login"):
+    if st.sidebar.button("Login", key="login_btn"):
         idx = USERNAMES.index(username)
         if PASSWORDS[idx] == password:
             token = issue_token(username, NAMES[idx])
-            set_cookie(token)
+            set_cookie(token)                               # for future visits
+            st.session_state[SESSION_TOKEN_KEY] = token     # for immediate route now
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
 
 def render_logout_panel(display_name):
     st.sidebar.success(f"Logged in as {display_name}")
-    if st.sidebar.button("Logout"):
+    if st.sidebar.button("Logout", key="logout_btn"):
         clear_cookie()
+        st.session_state.pop(SESSION_TOKEN_KEY, None)
         st.rerun()
 
 def main_router():
-    # Try cookie
-    token = get_cookie()
+    # Prefer session token (immediate after login), else cookie (returning visits)
+    token = st.session_state.get(SESSION_TOKEN_KEY) or get_cookie()
     user = verify_token(token) if token else None
 
     if user is None:
         render_login()
         st.stop()
     else:
-        # show logout on sidebar
         render_logout_panel(user["name"])
-        # route
         if ROLES.get(user["username"]) == "admin":
             manager_dashboard()
         else:
-            # use display name (e.g., "Wolf 1") for Orders "User" column and client ownership
+            # Use display name for ownership & Orders "User" column
             team_reporter(user["name"])
 
 # --------------------------- Main -------------------------------
 if __name__ == "__main__":
+    st.title(APP_TITLE)  # small top title for unauthenticated users too
     main_router()
