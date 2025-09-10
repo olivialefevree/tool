@@ -42,24 +42,30 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # --------------------- Token + cookie helpers ------------------
 # Badge in the top-right corner
+# Top-right badge (below Streamlit toolbar)
 st.markdown("""
-    <style>
-    .top-right-badge {
-        position: fixed;
-        top: 10px;
-        right: 18px;
-        background: rgba(0,0,0,0.6);
-        color: #fff;
-        padding: 6px 12px;
-        border-radius: 14px;
-        font-size: 12px;
-        line-height: 1;
-        z-index: 1000;
-        user-select: none;
-    }
-    </style>
-    <div class="top-right-badge">Made by 战狼 - Jerry</div>
+<style>
+#made-by-badge{
+  position: fixed;
+  top: 56px;            /* sit under the toolbar */
+  right: 16px;
+  background: rgba(0,0,0,.65);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1;
+  z-index: 99999;       /* above app content */
+  pointer-events: none; /* let clicks pass through */
+  backdrop-filter: blur(2px);
+}
+@media (max-width: 640px){
+  #made-by-badge{ top: 64px; right: 12px; font-size: 11px; }
+}
+</style>
+<div id="made-by-badge">Made by 战狼 - Jerry</div>
 """, unsafe_allow_html=True)
+
 
 def _sign(s: str) -> str:
     return hmac.new(COOKIE_SECRET.encode("utf-8"), s.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -379,4 +385,5 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
