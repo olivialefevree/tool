@@ -263,7 +263,12 @@ def manager_dashboard():
 # --------------------------- Auth (persistent) ------------------
 def run_app():
     # Hash passwords (runtime is fine for an internal tool)
+    try:
     hashed_passwords = stauth.Hasher(PASSWORDS).generate()
+except Exception as e:
+    st.error("Password hashing failed. Check Python version and requirements.")
+    st.stop()
+
 
     authenticator = stauth.Authenticate(
         NAMES, USERNAMES, hashed_passwords,
@@ -292,3 +297,4 @@ def run_app():
 # --------------------------- Main -------------------------------
 if __name__ == "__main__":
     run_app()
+
