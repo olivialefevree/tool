@@ -33,7 +33,8 @@ ROLES = { "jerry":"admin", "wolf1":"team", "wolf2":"team", "wolf3":"team",
 COOKIE_NAME = "orders_auth_v2"
 COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← CHANGE to a long random string and keep it stable
 COOKIE_EXPIRY_DAYS = 180
-SESSION_TOKEN_KEY = "auth_token"     # session token for immediate routing
+SESSION_TOKEN_KEY = "auth_token"         # for instant routing after login
+POST_LOGOUT_FLAG  = "__just_logged_out"  # to ignore cookie for one render after logout
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -65,27 +66,26 @@ def verify_token(token_b64: str):
 cookie_manager = stx.CookieManager(key="cookie-manager")
 
 def set_cookie(value: str):
-    # HTTPS on Streamlit Cloud → secure=True
     cookie_manager.set(
         COOKIE_NAME, value,
         max_age=COOKIE_EXPIRY_DAYS * 24 * 3600,
         path="/", same_site="Lax", secure=True, key=f"set-{COOKIE_NAME}"
     )
 
-def get_cookie_now():
-    # Returns cookies dict or None on very first render
-    return cookie_manager.get_all()
+def get_cookies_now():
+    return cookie_manager.get_all()  # can be None on first render
 
-def get_cookie_value():
-    cookies = get_cookie_now()
+def get_cookie_value_or_wait():
+    cookies = get_cookies_now()
     if cookies is None:
-        st.stop()  # allow component JS to load cookies; next run cookies will be available
+        st.stop()  # allow cookie component to initialize; next run will have cookies
     return cookies.get(COOKIE_NAME)
 
 def clear_cookie():
     try:
         cookie_manager.set(
-            COOKIE_NAME, "", max_age=0, path="/", same_site="Lax", secure=True, key=f"clr-{COOKIE_NAME}"
+            COOKIE_NAME, "", max_age=0,
+            path="/", same_site="Lax", secure=True, key=f"clr-{COOKIE_NAME}"
         )
     except Exception:
         pass
@@ -172,7 +172,7 @@ def add_client(user: str, client_name: str):
 def delete_client(user: str, client_name: str):
     ws = get_clients_ws()
     vals = ws.get_all_values()
-    for i in range(len(vals)-1, 0, -1):  # skip header
+    for i in range(len(vals)-1, 0, -1):
         row = vals[i]
         if len(row) >= 2 and row[0] == user and row[1] == client_name:
             ws.delete_rows(i+1)
@@ -313,9 +313,7 @@ def render_login():
         idx = USERNAMES.index(username)
         if PASSWORDS[idx] == password:
             token = issue_token(username, NAMES[idx])
-            # Do NOT set the cookie right before rerun (browser won’t have time).
-            # Instead: keep token in session; router will write the cookie after rerun.
-            st.session_state[SESSION_TOKEN_KEY] = token
+            st.session_state[SESSION_TOKEN_KEY] = token  # write cookie after rerun in router
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
@@ -323,33 +321,42 @@ def render_login():
 def render_logout_panel(display_name):
     st.sidebar.success(f"Logged in as {display_name}")
     if st.sidebar.button("Logout", key="logout_btn"):
-        clear_cookie()
+        # mark logout, clear session token, and rerun; router will ignore cookie once and re-clear
+        st.session_state[POST_LOGOUT_FLAG] = True
         st.session_state.pop(SESSION_TOKEN_KEY, None)
+        clear_cookie()
         st.rerun()
 
 def main_router():
-    # 1) If we have a session token (user just logged in, or same tab), ensure cookie exists.
+    # If we JUST logged out, ignore any cookie for one run and ensure it’s cleared
+    if st.session_state.get(POST_LOGOUT_FLAG):
+        clear_cookie()
+        st.session_state.pop(POST_LOGOUT_FLAG, None)
+        render_login()
+        st.stop()
+
+    # If we have a session token (fresh login), ensure a cookie exists
     session_token = st.session_state.get(SESSION_TOKEN_KEY)
     if session_token:
-        cookies = get_cookie_now()
+        cookies = get_cookies_now()
         if cookies is None:
-            st.stop()  # wait one render for cookies API
+            st.stop()  # wait for cookie component
         if COOKIE_NAME not in cookies:
-            set_cookie(session_token)  # write cookie AFTER rerun cycle
+            set_cookie(session_token)  # write cookie now (after rerun cycle)
             st.stop()                  # pause once so browser stores it
         user = verify_token(session_token)
         if user:
             render_logout_panel(user["name"])
             return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
 
-    # 2) Otherwise, rely on cookie for returning visits
-    token_from_cookie = get_cookie_value()
+    # Otherwise, use the cookie (returning visits)
+    token_from_cookie = get_cookie_value_or_wait()
     user = verify_token(token_from_cookie) if token_from_cookie else None
     if user:
         render_logout_panel(user["name"])
         return manager_dashboard() if ROLES.get(user["username"]) == "admin" else team_reporter(user["name"])
 
-    # 3) No valid session/cookie → show login
+    # No valid session/cookie → show login
     render_login()
     st.stop()
 
