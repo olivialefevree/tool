@@ -120,15 +120,14 @@ def get_gsheet():
     return ws
 
 @st.cache_data(ttl=30)
+@st.cache_data(ttl=30)
 def load_dataframe():
     ws = get_gsheet()
-    records = ws.get_all_records()
+    records = ws.get_all_records()   # uses first row as header
     df = pd.DataFrame(records)
-    if df.empty:
-        df = pd.DataFrame(columns=["Timestamp","User","TeamMember","Client","Store","OrderID","Amount","Notes","OrderDate"])
-    if "Amount" in df.columns:
-        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0.0)
+    df = normalize_df(df)
     return df
+
 
 def append_row(row_list):
     ws = get_gsheet()
@@ -186,6 +185,12 @@ def manager_dashboard():
         selected_tm = c2.selectbox("Filter by Team Member", team_members)
         date_from = c3.date_input("From", value=None)
         date_to = c4.date_input("To", value=None)
+        with st.expander("Admin tools"):
+    if st.button("Fix header (overwrite row 1)"):
+        fix_header()
+        st.success("Header fixed. Reloading…")
+        st.rerun()
+
 
     f = df.copy()
     if selected_user != "(All)": f = f[f["User"] == selected_user]
@@ -227,3 +232,4 @@ if role == "admin":
     manager_dashboard()
 else:
     team_reporter(username)
+
