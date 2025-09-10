@@ -1,10 +1,3 @@
-# Create an updated version of the app that fixes the rerun issue and makes secrets parsing robust.
-import os, zipfile, json, textwrap, pathlib
-
-base = "/mnt/data/streamlit-report-tool-v2"
-os.makedirs(base, exist_ok=True)
-
-report_app_py = r'''
 import streamlit as st
 import pandas as pd
 import gspread
@@ -14,8 +7,8 @@ import json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG: your Google Sheet
-SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # the long ID between /d/ and /edit in your sheet URL
-SHEET_NAME = "Sheet1"     # change if your first tab has a different name
+SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # your sheet ID
+SHEET_NAME = "Sheet1"                                       # tab name
 APP_TITLE = "Team Orders – Reports"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -26,7 +19,6 @@ USERS = {
     "admin": {"password": "admin123", "role": "admin"},
     "wolf1": {"password": "wolfpass1", "role": "team"},
     "wolf2": {"password": "wolfpass2", "role": "team"},
-    # add more team users here
 }
 
 def login_ui():
@@ -53,24 +45,13 @@ def logout_button():
 
 # --------------------- Google Sheets Client ---------------------
 def _load_service_account_from_secrets():
-    """
-    Support both TOML-table and JSON-string secrets formats:
-      - TOML table:
-          [gcp_service_account]
-          type="service_account"
-          ...
-          then st.secrets["gcp_service_account"] -> dict
-      - JSON string:
-          gcp_service_account = "{ ... }"
-          then st.secrets["gcp_service_account"] -> str
-    """
+    """Support TOML-table or JSON-string secrets."""
     raw = st.secrets["gcp_service_account"]
     if isinstance(raw, str):
         return json.loads(raw)
     return dict(raw)
 
 def get_gsheet():
-    """Authorize via Streamlit Secrets and return a gspread Worksheet."""
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
@@ -85,7 +66,6 @@ def get_gsheet():
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=SHEET_NAME, rows=1000, cols=20)
 
-    # Ensure header row
     header = ["Timestamp","User","TeamMember","Client","Store","OrderID","Amount","Notes","OrderDate"]
     values = ws.get_all_values()
     if not values:
@@ -116,18 +96,14 @@ def team_reporter(username):
     st.title("📝 Team Reporter")
     st.caption(f"Logged in as **{username}**")
 
-    # Persist team member display name per user
     key_tm = f"tm_name_{username}"
     team_member = st.text_input("Team member (display name)", st.session_state.get(key_tm, username))
     st.session_state[key_tm] = team_member
 
     colA, colB, colC = st.columns(3)
-    with colA:
-        order_date = st.date_input("Order date", value=date.today())
-    with colB:
-        client = st.text_input("Client")
-    with colC:
-        store = st.text_input("Store")
+    with colA: order_date = st.date_input("Order date", value=date.today())
+    with colB: client = st.text_input("Client")
+    with colC: store = st.text_input("Store")
 
     order_id = st.text_input("Order ID")
     amount = st.number_input("Amount", min_value=0.0, step=0.01)
@@ -142,7 +118,7 @@ def team_reporter(username):
         try:
             append_row(new_row)
             st.success("✅ Order submitted.")
-            st.rerun()  # fix: use st.rerun (experimental_rerun removed)
+            st.rerun()
         except Exception as e:
             st.error(f"Failed to submit: {e}")
 
@@ -155,12 +131,10 @@ def team_reporter(username):
 def manager_dashboard():
     st.title("📊 Manager Dashboard (Admin)")
     df = load_dataframe()
-
     if df.empty:
         st.info("No reports yet.")
         return
 
-    # Filters
     with st.expander("Filters", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         users = ["(All)"] + sorted(df["User"].dropna().unique().tolist())
@@ -171,16 +145,11 @@ def manager_dashboard():
         date_to = c4.date_input("To", value=None)
 
     f = df.copy()
-    if selected_user != "(All)":
-        f = f[f["User"] == selected_user]
-    if selected_tm != "(All)":
-        f = f[f["TeamMember"] == selected_tm]
-    if date_from:
-        f = f[pd.to_datetime(f["OrderDate"], errors="coerce") >= pd.to_datetime(date_from)]
-    if date_to:
-        f = f[pd.to_datetime(f["OrderDate"], errors="coerce") <= pd.to_datetime(date_to)]
+    if selected_user != "(All)": f = f[f["User"] == selected_user]
+    if selected_tm != "(All)": f = f[f["TeamMember"] == selected_tm]
+    if date_from: f = f[pd.to_datetime(f["OrderDate"], errors="coerce") >= pd.to_datetime(date_from)]
+    if date_to:   f = f[pd.to_datetime(f["OrderDate"], errors="coerce") <= pd.to_datetime(date_to)]
 
-    # KPIs
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Orders", f"{len(f):,}")
     col2.metric("Total Amount", f"${f['Amount'].sum():,.2f}")
@@ -201,7 +170,6 @@ def manager_dashboard():
     st.subheader("All Orders")
     st.dataframe(f.sort_values("Timestamp", ascending=False), use_container_width=True)
 
-    # Export
     st.download_button("⬇ Download CSV", f.to_csv(index=False).encode("utf-8"),
                        "all_reports.csv", "text/csv")
 
@@ -216,21 +184,3 @@ if role == "admin":
     manager_dashboard()
 else:
     team_reporter(username)
-'''
-open(os.path.join(base, "report_app.py"), "w", encoding="utf-8").write(report_app_py)
-
-requirements_txt = """\
-streamlit
-pandas
-gspread
-oauth2client
-"""
-open(os.path.join(base, "requirements.txt"), "w", encoding="utf-8").write(requirements_txt)
-
-zip_path = "/mnt/data/streamlit-report-tool-v2.zip"
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-    zf.write(os.path.join(base, "report_app.py"), arcname="report_app.py")
-    zf.write(os.path.join(base, "requirements.txt"), arcname="requirements.txt")
-
-zip_path
-
