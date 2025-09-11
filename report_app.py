@@ -441,7 +441,10 @@ def admin_tools(actor_display):
         st.caption("Select a row to edit or delete. Reason is required.")
         st.dataframe(all_df.sort_values("Timestamp", ascending=False), use_container_width=True, height=320)
 
-        sheet_row = st.number_input("Sheet row to modify (see leftmost 'SheetRow')", min_value=2, step=1)
+        sheet_row = st.number_input(
+            "Sheet row to modify (see leftmost 'SheetRow')",
+            min_value=2, step=1, key="adm_edit_row"
+        )
         if sheet_row:
             current = all_df[all_df["SheetRow"]==sheet_row]
             if not current.empty:
@@ -449,16 +452,16 @@ def admin_tools(actor_display):
                 st.write(f"Editing row {sheet_row}:")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    new_client = st.text_input("Client", value=cur["Client"])
+                    new_client = st.text_input("Client", value=cur["Client"], key="adm_edit_client")
                 with col2:
-                    new_amount = st.number_input("Amount", value=float(cur.get("Amount",0.0)), step=0.01)
+                    new_amount = st.number_input("Amount", value=float(cur.get("Amount",0.0)), step=0.01, key="adm_edit_amount")
                 with col3:
-                    new_profit = st.number_input("Profit %", value=float(cur.get("ProfitPct",0.0)), step=0.1)
-                reason = st.text_input("Reason (required)")
+                    new_profit = st.number_input("Profit %", value=float(cur.get("ProfitPct",0.0)), step=0.1, key="adm_edit_profit")
+                reason = st.text_input("Reason (required)", key="adm_edit_reason")
 
                 cA, cB = st.columns(2)
                 with cA:
-                    if st.button("💾 Save changes"):
+                    if st.button("💾 Save changes", key="adm_save_changes"):
                         if not reason.strip():
                             st.error("Reason is required.")
                         else:
@@ -469,7 +472,7 @@ def admin_tools(actor_display):
                             st.success("Updated.")
                             st.rerun()
                 with cB:
-                    if st.button("🗑️ Delete this order"):
+                    if st.button("🗑️ Delete this order", key="adm_delete_order"):
                         if not reason.strip():
                             st.error("Reason is required.")
                         else:
@@ -490,18 +493,18 @@ def admin_tools(actor_display):
         st.caption("Save current filters as a preset, or apply an existing one.")
         c1,c2,c3,c4,c5 = st.columns(5)
         with c1:
-            sel_user = st.selectbox("User", users)
+            sel_user = st.selectbox("User", users, key="adm_preset_user")
         with c2:
-            sel_client = st.selectbox("Client", clients)
+            sel_client = st.selectbox("Client", clients, key="adm_preset_client")
         with c3:
-            sel_status = st.selectbox("Status", statuses)
+            sel_status = st.selectbox("Status", statuses, key="adm_preset_status")
         with c4:
-            from_date = st.date_input("From (Timestamp)", value=None)
+            from_date = st.date_input("From (Timestamp)", value=None, key="adm_preset_from")
         with c5:
-            to_date = st.date_input("To (Timestamp)", value=None)
+            to_date = st.date_input("To (Timestamp)", value=None, key="adm_preset_to")
 
-        name = st.text_input("Preset name")
-        if st.button("💾 Save preset"):
+        name = st.text_input("Preset name", key="adm_preset_name")
+        if st.button("💾 Save preset", key="adm_save_preset"):
             if not name.strip():
                 st.error("Give the preset a name.")
             else:
@@ -516,16 +519,16 @@ def admin_tools(actor_display):
             st.info("No presets yet.")
         else:
             st.dataframe(presets, use_container_width=True)
-            pname = st.selectbox("Apply or delete preset", [""] + presets["Name"].tolist())
+            pname = st.selectbox("Apply or delete preset", [""] + presets["Name"].tolist(), key="adm_preset_pick")
             cA, cB = st.columns(2)
             with cA:
-                if st.button("✅ Apply preset"):
+                if st.button("✅ Apply preset", key="adm_apply_preset"):
                     if pname:
                         row = presets[presets["Name"]==pname].iloc[0].to_dict()
                         st.session_state["preset_applied"] = row
                         st.success(f"Applied preset '{pname}'. Go to dashboard filters above.")
             with cB:
-                if st.button("🗑️ Delete preset"):
+                if st.button("🗑️ Delete preset", key="adm_delete_preset"):
                     if pname:
                         delete_preset_by_name(pname, actor_display)
                         st.success("Preset deleted.")
@@ -539,12 +542,12 @@ def admin_tools(actor_display):
         users_df = get_active_users()
         add_u, add_c, add_d = st.columns([2,2,1])
         with add_u:
-            chosen_user = st.selectbox("User (DisplayName)", users_df["DisplayName"].tolist())
+            chosen_user = st.selectbox("User (DisplayName)", users_df["DisplayName"].tolist(), key="adm_global_user")
         with add_c:
-            new_client = st.text_input("Client name (global add)")
+            new_client = st.text_input("Client name (global add)", key="adm_global_client")
         with add_d:
-            new_date = st.date_input("Open date", value=date.today())
-        if st.button("➕ Add client (global)"):
+            new_date = st.date_input("Open date", value=date.today(), key="adm_global_open_date")
+        if st.button("➕ Add client (global)", key="adm_add_client_global"):
             add_client(chosen_user, new_client, new_date)
             load_clients_df.clear()
             st.success("Client added.")
@@ -552,8 +555,8 @@ def admin_tools(actor_display):
 
         st.divider()
         st.markdown("**Edit / Delete existing client**")
-        rownum = st.number_input("Client Sheet row", min_value=2, step=1)
-        if st.button("Load client row"):
+        rownum = st.number_input("Client Sheet row", min_value=2, step=1, key="adm_client_row")
+        if st.button("Load client row", key="adm_load_client_row"):
             st.session_state["client_row_to_edit"] = int(rownum)
         if "client_row_to_edit" in st.session_state:
             row_id = st.session_state["client_row_to_edit"]
@@ -562,25 +565,25 @@ def admin_tools(actor_display):
                 rec = row.iloc[0].to_dict()
                 e1,e2,e3 = st.columns([2,2,1])
                 with e1:
-                    eu = st.text_input("User (DisplayName)", value=rec["User"])
+                    eu = st.text_input("User (DisplayName)", value=rec["User"], key="adm_edit_client_user")
                 with e2:
-                    ec = st.text_input("Client", value=rec["Client"])
+                    ec = st.text_input("Client", value=rec["Client"], key="adm_edit_client_name")
                 with e3:
                     try:
                         dt = pd.to_datetime(rec["OpenDate"]).date() if rec["OpenDate"] else date.today()
                     except Exception:
                         dt = date.today()
-                    ed = st.date_input("OpenDate", value=dt)
+                    ed = st.date_input("OpenDate", value=dt, key="adm_edit_client_open")
                 cA,cB = st.columns(2)
                 with cA:
-                    if st.button("💾 Save client"):
+                    if st.button("💾 Save client", key="adm_save_client"):
                         update_client(int(row_id), eu, ec, ed, actor_display)
                         load_clients_df.clear()
                         st.success("Client updated.")
                         st.rerun()
                 with cB:
-                    reason = st.text_input("Reason for delete (required)")
-                    if st.button("🗑️ Delete client"):
+                    reason = st.text_input("Reason for delete (required)", key="adm_client_del_reason")
+                    if st.button("🗑️ Delete client", key="adm_delete_client"):
                         if not reason.strip():
                             st.error("Reason is required.")
                         else:
@@ -599,16 +602,16 @@ def admin_tools(actor_display):
         st.markdown("**Add new user**")
         u1,u2,u3,u4 = st.columns([2,2,1,1])
         with u1:
-            new_un = st.text_input("Username (no spaces)")
+            new_un = st.text_input("Username (no spaces)", key="adm_new_un")
         with u2:
-            new_dn = st.text_input("Display name")
+            new_dn = st.text_input("Display name", key="adm_new_dn")
         with u3:
-            new_role = st.selectbox("Role", ["team","admin"])
+            new_role = st.selectbox("Role", ["team","admin"], key="adm_new_role")
         with u4:
-            gen_pw = st.checkbox("Generate password", value=True)
-        pw_val = random_password(12) if gen_pw else st.text_input("Password (plain)")
+            gen_pw = st.checkbox("Generate password", value=True, key="adm_gen_pw")
+        pw_val = random_password(12) if gen_pw else st.text_input("Password (plain)", key="adm_new_pw")
 
-        if st.button("➕ Create user"):
+        if st.button("➕ Create user", key="adm_create_user"):
             if not new_un or not new_dn:
                 st.error("Username and Display name required.")
             else:
@@ -623,17 +626,17 @@ def admin_tools(actor_display):
 
         st.divider()
         st.markdown("**Reset password / Change role / Activate or Deactivate**")
-        sel_user = st.selectbox("Pick user", udf["Username"].tolist())
+        sel_user = st.selectbox("Pick user", udf["Username"].tolist(), key="adm_pick_user")
         if sel_user:
             row = udf[udf["Username"]==sel_user].iloc[0].to_dict()
             c1,c2,c3 = st.columns(3)
             with c1:
-                new_role2 = st.selectbox("Role", ["team","admin"], index=0 if row["Role"]=="team" else 1)
+                new_role2 = st.selectbox("Role", ["team","admin"], index=0 if row["Role"]=="team" else 1, key="adm_role2")
             with c2:
-                active2 = st.selectbox("Active", ["TRUE","FALSE"], index=0 if str(row["Active"]).upper() in ["TRUE","1","YES","Y"] else 1)
+                active2 = st.selectbox("Active", ["TRUE","FALSE"], index=0 if str(row["Active"]).upper() in ["TRUE","1","YES","Y"] else 1, key="adm_active2")
             with c3:
-                new_pw2 = st.text_input("New password (leave blank to keep)")
-            if st.button("💾 Update user"):
+                new_pw2 = st.text_input("New password (leave blank to keep)", key="adm_new_pw2")
+            if st.button("💾 Update user", key="adm_update_user"):
                 ws = ensure_users_sheet_seed()
                 _with_retry(ws.update, f"A{row['SheetRow']}:E{row['SheetRow']}",
                             [[row["Username"], row["DisplayName"], new_role2, new_pw2 or row["Password"], active2]])
@@ -645,7 +648,7 @@ def admin_tools(actor_display):
         st.markdown("**Maintenance**")
         colm1, colm2 = st.columns(2)
         with colm1:
-            if st.button("🧹 Remove *_conflict* tabs"):
+            if st.button("🧹 Remove *_conflict* tabs", key="adm_cleanup_tabs"):
                 removed = cleanup_conflict_tabs()
                 if removed:
                     st.success(f"Deleted: {', '.join(removed)}")
@@ -653,7 +656,7 @@ def admin_tools(actor_display):
                 else:
                     st.info("No conflict tabs found.")
         with colm2:
-            if st.button("♻️ Reset Google connection (clears cache)"):
+            if st.button("♻️ Reset Google connection (clears cache)", key="adm_reset_conn"):
                 try:
                     _get_spreadsheet.clear()
                     _gs_client.clear()
@@ -672,6 +675,7 @@ def admin_tools(actor_display):
         st.write(f"  - Users: `{USERS_SHEET}!A:E`  (Username, DisplayName, Role, Active)")
         st.info("In Looker Studio: Create → Data Source → Google Sheets → pick this file → select the tabs you need → Create Report.")
 
+
 # ------------------------- UI: Dashboard ------------------------
 def manager_dashboard(actor_display):
     st.title("📊 Manager Dashboard (Admin)")
@@ -687,12 +691,18 @@ def manager_dashboard(actor_display):
     def preset_or(default, key):
         return preset.get(key, default) if preset else default
 
-    sel_user   = c1.selectbox("User", users, index=users.index(preset_or("(All)","User")) if preset and preset.get("User") in users else 0)
-    sel_client = c2.selectbox("Client", clients, index=clients.index(preset_or("(All)","Client")) if preset and preset.get("Client") in clients else 0)
-    sel_status = c3.selectbox("Status", statuses, index=statuses.index(preset_or("(All)","Status")) if preset and preset.get("Status") in statuses else 0)
+    sel_user   = c1.selectbox("User", users,
+                              index=users.index(preset_or("(All)","User")) if preset and preset.get("User") in users else 0,
+                              key="dash_user")
+    sel_client = c2.selectbox("Client", clients,
+                              index=clients.index(preset_or("(All)","Client")) if preset and preset.get("Client") in clients else 0,
+                              key="dash_client")
+    sel_status = c3.selectbox("Status", statuses,
+                              index=statuses.index(preset_or("(All)","Status")) if preset and preset.get("Status") in statuses else 0,
+                              key="dash_status")
     from_raw = preset_or("", "FromDate"); to_raw = preset_or("", "ToDate")
-    sel_from = c4.date_input("From (Timestamp)", value=None if not from_raw else pd.to_datetime(from_raw).date())
-    sel_to   = c5.date_input("To (Timestamp)",   value=None if not to_raw else pd.to_datetime(to_raw).date())
+    sel_from = c4.date_input("From (Timestamp)", value=None if not from_raw else pd.to_datetime(from_raw).date(), key="dash_from")
+    sel_to   = c5.date_input("To (Timestamp)",   value=None if not to_raw else pd.to_datetime(to_raw).date(),   key="dash_to")
 
     f = df.copy()
     if sel_user != "(All)":   f = f[f["User"] == sel_user]
@@ -724,6 +734,7 @@ def manager_dashboard(actor_display):
 
     st.divider()
     admin_tools(actor_display)
+
 
 # --------------------------- Auth + Router ----------------------
 def render_login(dynamic_users: pd.DataFrame):
@@ -812,3 +823,4 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
