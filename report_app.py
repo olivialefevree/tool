@@ -84,74 +84,105 @@ def clear_cookie():
         pass
 
 # --------------------- Google Sheets helpers -------------------
+from gspread.exceptions import APIError
+import time
+
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
 def _load_service_account_from_secrets():
     raw = st.secrets["gcp_service_account"]
     if isinstance(raw, str):
         return json.loads(raw)
     return dict(raw)
 
+def _with_retry(fn, *args, **kwargs):
+    """Retry transient Google API errors with exponential backoff."""
+    delay = 0.5
+    for attempt in range(6):  # up to ~15s max
+        try:
+            return fn(*args, **kwargs)
+        except APIError as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in RETRY_STATUS:
+                time.sleep(delay)
+                delay = min(delay * 2, 8.0)
+                continue
+            raise
+        except Exception:
+            # non-API error (network hiccup etc.) – 1 quick retry
+            if attempt == 0:
+                time.sleep(0.5)
+                continue
+            raise
+
+@st.cache_resource(show_spinner=False)
 def _gs_client():
-    scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
     svc = _load_service_account_from_secrets()
     creds = ServiceAccountCredentials.from_json_keyfile_dict(svc, scope)
     return gspread.authorize(creds)
 
-def _open_ws(title):
-    sh = _gs_client().open_by_key(SHEET_ID)
+@st.cache_resource(show_spinner=False)
+def _get_spreadsheet():
+    """Open the Spreadsheet ONCE and reuse across reruns."""
+    gc = _gs_client()
+    return _with_retry(gc.open_by_key, SHEET_ID)
+
+def _open_ws(title: str):
+    """Get or create a worksheet, using cached Spreadsheet handle."""
+    sh = _get_spreadsheet()
     try:
         return sh.worksheet(title)
     except gspread.exceptions.WorksheetNotFound:
-        return sh.add_worksheet(title=title, rows=3000, cols=30)
+        return _with_retry(sh.add_worksheet, title=title, rows=3000, cols=30)
 
 def ensure_orders_header():
     ws = _open_ws(ORDERS_SHEET)
-    values = ws.get_all_values()
+    values = _with_retry(ws.get_all_values)
     if not values or ws.row_values(1) != EXPECTED_HEADER:
-        ws.update(f"A1:{chr(ord('A')+len(EXPECTED_HEADER)-1)}1", [EXPECTED_HEADER])
+        _with_retry(ws.update, f"A1:{chr(ord('A')+len(EXPECTED_HEADER)-1)}1", [EXPECTED_HEADER])
     return ws
 
 def ensure_clients_header():
     ws = _open_ws(CLIENTS_SHEET)
     header = ["User","Client","OpenDate"]
-    values = ws.get_all_values()
+    values = _with_retry(ws.get_all_values)
     if not values or ws.row_values(1) != header:
-        ws.update("A1:C1", [header])
+        _with_retry(ws.update, "A1:C1", [header])
     return ws
 
 def ensure_users_sheet_seed():
     ws = _open_ws(USERS_SHEET)
     header = ["Username","DisplayName","Role","Password","Active"]
-    values = ws.get_all_values()
+    values = _with_retry(ws.get_all_values)
     if not values:
-        ws.update("A1:E1", [header])
-        ws.update("A2:E8", [[u["Username"],u["DisplayName"],u["Role"],u["Password"],u["Active"]] for u in SEED_USERS])
+        _with_retry(ws.update, "A1:E1", [header])
+        _with_retry(ws.update, "A2:E8",
+            [[u["Username"],u["DisplayName"],u["Role"],u["Password"],u["Active"]] for u in SEED_USERS]
+        )
     elif ws.row_values(1) != header:
-        ws.update("A1:E1", [header])
+        _with_retry(ws.update, "A1:E1", [header])
     return ws
 
 def ensure_presets_header():
     ws = _open_ws(PRESETS_SHEET)
     header = ["Name","User","Client","Status","FromDate","ToDate"]
-    values = ws.get_all_values()
+    values = _with_retry(ws.get_all_values)
     if not values or ws.row_values(1) != header:
-        ws.update("A1:F1", [header])
+        _with_retry(ws.update, "A1:F1", [header])
     return ws
 
 def ensure_audit_header():
     ws = _open_ws(AUDIT_SHEET)
     header = ["At","Actor","Action","TargetSheet","SheetRow","Reason","OldJSON","NewJSON"]
-    values = ws.get_all_values()
+    values = _with_retry(ws.get_all_values)
     if not values or ws.row_values(1) != header:
-        ws.update("A1:H1", [header])
+        _with_retry(ws.update, "A1:H1", [header])
     return ws
 
-# Initialize sheets
-def init_all_sheets():
-    ensure_orders_header()
-    ensure_clients_header()
-    ensure_users_sheet_seed()
-    ensure_presets_header()
-    ensure_audit_header()
 
 # Row-numbered loaders (so we can edit/delete specific rows)
 def load_orders_with_rows() -> pd.DataFrame:
@@ -754,5 +785,6 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
