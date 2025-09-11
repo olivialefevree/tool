@@ -631,6 +631,15 @@ def admin_tools(actor_display):
                 st.rerun()
             else:
                 st.info("No conflict tabs found.")
+            # inside an Admin maintenance section
+if st.button("♻️ Reset Google connection (clears cache)"):
+    try:
+        _get_spreadsheet.clear()
+        _gs_client.clear()
+        st.success("Cleared cached Google connections. Reloading…")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Could not clear caches: {e}")
 
 
 
@@ -790,6 +799,7 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
 
