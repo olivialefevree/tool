@@ -4,21 +4,23 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, date, timedelta, timezone
 import json, hmac, hashlib, base64, time, random, string
+from gspread.exceptions import APIError
+import extra_streamlit_components as stx
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
 SHEET_ID = "1oEJNDoyP80Sy1cOOn6dvgZaevKJxiSu3Z5AEce8WInE"   # Google Sheet ID
 ORDERS_SHEET = "Sheet1"                                     # orders tab
 CLIENTS_SHEET = "Clients"                                   # clients tab
-USERS_SHEET   = "Users"                                     # users tab (new)
-PRESETS_SHEET = "FilterPresets"                             # presets tab (new)
-AUDIT_SHEET   = "AuditLog"                                  # audit tab (new)
+USERS_SHEET   = "Users"                                     # users tab
+PRESETS_SHEET = "FilterPresets"                             # presets tab
+AUDIT_SHEET   = "AuditLog"                                  # audit tab
 APP_TITLE = "Team Orders – Reports"
 
-# Orders schema (unchanged from last build)
+# Orders schema
 EXPECTED_HEADER = ["Timestamp","User","Client","Amount","ProfitPct","ProfitAmt","Status"]
 
-# Initial built-in accounts (seeded to Users sheet only once)
+# Initial built-in accounts (seeded to Users sheet once)
 SEED_USERS = [
     {"Username":"jerry","DisplayName":"Jerry","Role":"admin","Password":"Qa9$gH!7k2@","Active":"TRUE"},
     {"Username":"wolf1","DisplayName":"Wolf 1","Role":"team","Password":"tu8*NMh2!5","Active":"TRUE"},
@@ -31,7 +33,7 @@ SEED_USERS = [
 
 # Persistent login
 COOKIE_NAME = "orders_auth_v2"
-COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # ← set once & keep stable
+COOKIE_SECRET = "hQ8$3nV@71!xXo^p4GmJz2#fK9rT6e"  # change to a long random string & keep stable
 COOKIE_EXPIRY_DAYS = 180
 SESSION_TOKEN_KEY = "auth_token"
 POST_LOGOUT_FLAG  = "__just_logged_out"
@@ -73,7 +75,6 @@ def verify_token(token_b64: str):
     except Exception:
         return None
 
-import extra_streamlit_components as stx
 cookie_manager = stx.CookieManager()
 def set_cookie(value: str):
     cookie_manager.set(COOKIE_NAME, value, max_age=COOKIE_EXPIRY_DAYS*24*3600, path="/", same_site="Lax", secure=True)
@@ -84,9 +85,6 @@ def clear_cookie():
         pass
 
 # --------------------- Google Sheets helpers -------------------
-from gspread.exceptions import APIError
-import time
-
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
 def _load_service_account_from_secrets():
@@ -98,7 +96,7 @@ def _load_service_account_from_secrets():
 def _with_retry(fn, *args, **kwargs):
     """Retry transient Google API errors with exponential backoff."""
     delay = 0.5
-    for attempt in range(6):  # up to ~15s max
+    for attempt in range(6):  # ≈ up to ~15s
         try:
             return fn(*args, **kwargs)
         except APIError as e:
@@ -109,7 +107,6 @@ def _with_retry(fn, *args, **kwargs):
                 continue
             raise
         except Exception:
-            # non-API error (network hiccup etc.) – 1 quick retry
             if attempt == 0:
                 time.sleep(0.5)
                 continue
@@ -127,12 +124,10 @@ def _gs_client():
 
 @st.cache_resource(show_spinner=False)
 def _get_spreadsheet():
-    """Open the Spreadsheet ONCE and reuse across reruns."""
     gc = _gs_client()
     return _with_retry(gc.open_by_key, SHEET_ID)
 
 def _open_ws(title: str):
-    """Get or create a worksheet, using cached Spreadsheet handle."""
     sh = _get_spreadsheet()
     try:
         return sh.worksheet(title)
@@ -142,7 +137,8 @@ def _open_ws(title: str):
 def ensure_orders_header():
     ws = _open_ws(ORDERS_SHEET)
     values = _with_retry(ws.get_all_values)
-    if not values or ws.row_values(1) != EXPECTED_HEADER:
+    first = _with_retry(ws.row_values, 1) if values else []
+    if not values or first != EXPECTED_HEADER:
         _with_retry(ws.update, f"A1:{chr(ord('A')+len(EXPECTED_HEADER)-1)}1", [EXPECTED_HEADER])
     return ws
 
@@ -150,7 +146,8 @@ def ensure_clients_header():
     ws = _open_ws(CLIENTS_SHEET)
     header = ["User","Client","OpenDate"]
     values = _with_retry(ws.get_all_values)
-    if not values or ws.row_values(1) != header:
+    first = _with_retry(ws.row_values, 1) if values else []
+    if not values or first != header:
         _with_retry(ws.update, "A1:C1", [header])
     return ws
 
@@ -158,12 +155,13 @@ def ensure_users_sheet_seed():
     ws = _open_ws(USERS_SHEET)
     header = ["Username","DisplayName","Role","Password","Active"]
     values = _with_retry(ws.get_all_values)
+    first = _with_retry(ws.row_values, 1) if values else []
     if not values:
         _with_retry(ws.update, "A1:E1", [header])
         _with_retry(ws.update, "A2:E8",
             [[u["Username"],u["DisplayName"],u["Role"],u["Password"],u["Active"]] for u in SEED_USERS]
         )
-    elif ws.row_values(1) != header:
+    elif first != header:
         _with_retry(ws.update, "A1:E1", [header])
     return ws
 
@@ -171,7 +169,8 @@ def ensure_presets_header():
     ws = _open_ws(PRESETS_SHEET)
     header = ["Name","User","Client","Status","FromDate","ToDate"]
     values = _with_retry(ws.get_all_values)
-    if not values or ws.row_values(1) != header:
+    first = _with_retry(ws.row_values, 1) if values else []
+    if not values or first != header:
         _with_retry(ws.update, "A1:F1", [header])
     return ws
 
@@ -179,15 +178,30 @@ def ensure_audit_header():
     ws = _open_ws(AUDIT_SHEET)
     header = ["At","Actor","Action","TargetSheet","SheetRow","Reason","OldJSON","NewJSON"]
     values = _with_retry(ws.get_all_values)
-    if not values or ws.row_values(1) != header:
+    first = _with_retry(ws.row_values, 1) if values else []
+    if not values or first != header:
         _with_retry(ws.update, "A1:H1", [header])
     return ws
 
+def init_all_sheets():
+    ensure_orders_header()
+    ensure_clients_header()
+    ensure_users_sheet_seed()
+    ensure_presets_header()
+    ensure_audit_header()
+
+def cleanup_conflict_tabs():
+    """Delete any *_conflict* tabs (maintenance)."""
+    sh = _get_spreadsheet()
+    to_delete = [ws for ws in sh.worksheets() if "_conflict" in ws.title]
+    for ws in to_delete:
+        _with_retry(sh.del_worksheet, ws)
+    return [w.title for w in to_delete]
 
 # Row-numbered loaders (so we can edit/delete specific rows)
 def load_orders_with_rows() -> pd.DataFrame:
     ws = ensure_orders_header()
-    rows = ws.get_all_values()
+    rows = _with_retry(ws.get_all_values)
     if len(rows) <= 1:
         return pd.DataFrame(columns=["SheetRow"]+EXPECTED_HEADER)
     data = []
@@ -197,7 +211,6 @@ def load_orders_with_rows() -> pd.DataFrame:
         rec["SheetRow"] = i
         data.append(rec)
     df = pd.DataFrame(data)
-    # normalize dtypes
     for c in EXPECTED_HEADER:
         if c not in df.columns:
             df[c] = ""
@@ -218,7 +231,7 @@ def load_orders_df_cached() -> pd.DataFrame:
 @st.cache_data(ttl=15)
 def load_clients_df() -> pd.DataFrame:
     ws = ensure_clients_header()
-    rows = ws.get_all_values()
+    rows = _with_retry(ws.get_all_values)
     if len(rows) <= 1:
         return pd.DataFrame(columns=["SheetRow","User","Client","OpenDate"])
     data = []
@@ -232,7 +245,7 @@ def load_clients_df() -> pd.DataFrame:
 
 def load_users_df() -> pd.DataFrame:
     ws = ensure_users_sheet_seed()
-    rows = ws.get_all_values()
+    rows = _with_retry(ws.get_all_values)
     if len(rows) <= 1:
         return pd.DataFrame(columns=["SheetRow","Username","DisplayName","Role","Password","Active"])
     data = []
@@ -246,67 +259,63 @@ def load_users_df() -> pd.DataFrame:
 
 def append_order_row(row_list):
     ws = ensure_orders_header()
-    ws.append_row(row_list)
+    _with_retry(ws.append_row, row_list)
 
 def update_order_row(sheet_row:int, new_values:dict, actor:str, reason:str, old_record:dict):
     ws = ensure_orders_header()
     full = old_record.copy()
     full.update(new_values)
-    # recompute ProfitAmt and Status
     full["Amount"] = float(full.get("Amount",0))
     full["ProfitPct"] = float(full.get("ProfitPct",0))
     full["ProfitAmt"] = round(full["Amount"]*full["ProfitPct"]/100.0,2)
-    # compute Status live by timestamp
     try:
         ts = pd.to_datetime(full["Timestamp"], utc=True)
     except Exception:
         ts = pd.Timestamp.utcnow()
     age_h = (pd.Timestamp.utcnow() - ts).total_seconds()/3600.0
     full["Status"] = "Completed" if age_h >= 120 else "In Process"
-    # update row
     values = [full.get(h,"") for h in EXPECTED_HEADER]
-    ws.update(f"A{sheet_row}:{chr(ord('A')+len(EXPECTED_HEADER)-1)}{sheet_row}", [values])
-    # audit
+    _with_retry(ws.update, f"A{sheet_row}:{chr(ord('A')+len(EXPECTED_HEADER)-1)}{sheet_row}", [values])
     log_audit(actor, "EDIT_ORDER", ORDERS_SHEET, sheet_row, reason, old_record, full)
 
 def delete_order_row(sheet_row:int, actor:str, reason:str, old_record:dict):
     ws = ensure_orders_header()
-    ws.delete_rows(sheet_row)
+    _with_retry(ws.delete_rows, sheet_row)
     log_audit(actor, "DELETE_ORDER", ORDERS_SHEET, sheet_row, reason, old_record, None)
 
 def add_client(user: str, client_name: str, open_date: date):
     if not client_name.strip(): return
     ws = ensure_clients_header()
-    ws.append_row([user, client_name.strip(), open_date.strftime("%Y-%m-%d")])
+    _with_retry(ws.append_row, [user, client_name.strip(), open_date.strftime("%Y-%m-%d")])
 
 def update_client(sheet_row:int, user:str, client:str, open_date:date, actor:str):
     ws = ensure_clients_header()
-    ws.update(f"A{sheet_row}:C{sheet_row}", [[user, client, open_date.strftime("%Y-%m-%d")]])
+    _with_retry(ws.update, f"A{sheet_row}:C{sheet_row}", [[user, client, open_date.strftime("%Y-%m-%d")]])
     log_audit(actor, "EDIT_CLIENT", CLIENTS_SHEET, sheet_row, "-", None, {"User":user,"Client":client,"OpenDate":str(open_date)})
 
 def delete_client_row(sheet_row:int, actor:str, reason:str, old_record:dict):
     ws = ensure_clients_header()
-    ws.delete_rows(sheet_row)
+    _with_retry(ws.delete_rows, sheet_row)
     log_audit(actor, "DELETE_CLIENT", CLIENTS_SHEET, sheet_row, reason, old_record, None)
 
 def save_preset(name, user, client, status, dfrom, dto, actor):
     ws = ensure_presets_header()
-    ws.append_row([name, user or "", client or "", status or "", dfrom or "", dto or ""])
+    _with_retry(ws.append_row, [name, user or "", client or "", status or "", dfrom or "", dto or ""])
     log_audit(actor, "SAVE_PRESET", PRESETS_SHEET, "-", "-", None, {"Name":name})
 
 def delete_preset_by_name(name, actor):
     ws = ensure_presets_header()
-    vals = ws.get_all_values()
+    vals = _with_retry(ws.get_all_values)
     for i in range(len(vals)-1, 0, -1):
         row = vals[i]
         if len(row) >= 1 and row[0] == name:
-            ws.delete_rows(i+1)
+            _with_retry(ws.delete_rows, i+1)
             log_audit(actor, "DELETE_PRESET", PRESETS_SHEET, i+1, "-", {"Name":name}, None)
             break
 
 def list_presets_df():
     ws = ensure_presets_header()
-    vals = ws.get_all_values()
+    vals = _with_retry(ws.get_all_values)
     if len(vals)<=1: return pd.DataFrame(columns=["Name","User","Client","Status","FromDate","ToDate"])
     hdr = vals[0]
     recs = []
@@ -317,18 +326,31 @@ def list_presets_df():
 def log_audit(actor, action, target_sheet, sheet_row, reason, old_obj, new_obj):
     ws = ensure_audit_header()
     at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    ws.append_row([at, actor, action, target_sheet, str(sheet_row), reason or "-", json.dumps(old_obj or {}), json.dumps(new_obj or {})])
+    _with_retry(ws.append_row, [at, actor, action, target_sheet, str(sheet_row), reason or "-", json.dumps(old_obj or {}), json.dumps(new_obj or {})])
 
 def random_password(n=12):
     chars = string.ascii_letters + string.digits + "!@#$%^&*()_-+"
     return "".join(random.choice(chars) for _ in range(n))
 
 # --------------------------- Auth (dynamic users) ---------------
+def load_users_df() -> pd.DataFrame:
+    ws = ensure_users_sheet_seed()
+    rows = _with_retry(ws.get_all_values)
+    if len(rows) <= 1:
+        return pd.DataFrame(columns=["SheetRow","Username","DisplayName","Role","Password","Active"])
+    data = []
+    hdr = rows[0]
+    for i, r in enumerate(rows[1:], start=2):
+        rec = {h: (r[idx] if idx < len(r) else "") for idx, h in enumerate(hdr)}
+        rec["SheetRow"] = i
+        data.append(rec)
+    df = pd.DataFrame(data)
+    return df[["SheetRow","Username","DisplayName","Role","Password","Active"]]
+
 def get_active_users():
     users = load_users_df()
     users["Active"] = users["Active"].astype(str).str.upper().isin(["TRUE","1","YES","Y"])
-    active = users[users["Active"]==True]
-    return active
+    return users[users["Active"]==True]
 
 def get_user_record(username):
     users = load_users_df()
@@ -365,7 +387,6 @@ def team_reporter(display_name):
                 client_to_delete = st.selectbox("Delete one of my clients", my_clients)
             with del_col2:
                 if st.button("🗑️ Delete selected"):
-                    # find that row for current user
                     df = load_clients_df()
                     row = df[(df["User"]==display_name) & (df["Client"]==client_to_delete)].head(1)
                     if not row.empty:
@@ -410,7 +431,6 @@ def team_reporter(display_name):
 def admin_tools(actor_display):
     st.subheader("🛠️ Admin tools")
 
-    # Tabs for features
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Edit/Delete Orders", "Filter Presets", "Global Client Manager", "User Management", "Looker Studio"
     ])
@@ -421,7 +441,6 @@ def admin_tools(actor_display):
         st.caption("Select a row to edit or delete. Reason is required.")
         st.dataframe(all_df.sort_values("Timestamp", ascending=False), use_container_width=True, height=320)
 
-        # pick row by SheetRow
         sheet_row = st.number_input("Sheet row to modify (see leftmost 'SheetRow')", min_value=2, step=1)
         if sheet_row:
             current = all_df[all_df["SheetRow"]==sheet_row]
@@ -503,7 +522,7 @@ def admin_tools(actor_display):
                 if st.button("✅ Apply preset"):
                     if pname:
                         row = presets[presets["Name"]==pname].iloc[0].to_dict()
-                        st.session_state["preset_applied"] = row  # app reads this in dashboard filters
+                        st.session_state["preset_applied"] = row
                         st.success(f"Applied preset '{pname}'. Go to dashboard filters above.")
             with cB:
                 if st.button("🗑️ Delete preset"):
@@ -594,11 +613,10 @@ def admin_tools(actor_display):
                 st.error("Username and Display name required.")
             else:
                 ws = ensure_users_sheet_seed()
-                # ensure unique username
                 if not udf[udf["Username"]==new_un].empty:
                     st.error("Username already exists.")
                 else:
-                    ws.append_row([new_un, new_dn, new_role, pw_val, "TRUE"])
+                    _with_retry(ws.append_row, [new_un, new_dn, new_role, pw_val, "TRUE"])
                     log_audit(actor_display, "ADD_USER", USERS_SHEET, "-", "-", None, {"Username":new_un})
                     st.success(f"User created. Password: {pw_val}")
                     st.rerun()
@@ -617,32 +635,32 @@ def admin_tools(actor_display):
                 new_pw2 = st.text_input("New password (leave blank to keep)")
             if st.button("💾 Update user"):
                 ws = ensure_users_sheet_seed()
-                ws.update(f"A{row['SheetRow']}:E{row['SheetRow']}",
-                          [[row["Username"], row["DisplayName"], new_role2, new_pw2 or row["Password"], active2]])
+                _with_retry(ws.update, f"A{row['SheetRow']}:E{row['SheetRow']}",
+                            [[row["Username"], row["DisplayName"], new_role2, new_pw2 or row["Password"], active2]])
                 log_audit(actor_display, "UPDATE_USER", USERS_SHEET, row["SheetRow"], "-", None, {"Username":row["Username"]})
                 st.success("User updated.")
                 st.rerun()
-            st.divider()
-            st.markdown("**Maintenance**")
+
+        st.divider()
+        st.markdown("**Maintenance**")
+        colm1, colm2 = st.columns(2)
+        with colm1:
             if st.button("🧹 Remove *_conflict* tabs"):
                 removed = cleanup_conflict_tabs()
-            if removed:
-                st.success(f"Deleted: {', '.join(removed)}")
-                st.rerun()
-            else:
-                st.info("No conflict tabs found.")
-            # inside an Admin maintenance section
-if st.button("♻️ Reset Google connection (clears cache)"):
-    try:
-        _get_spreadsheet.clear()
-        _gs_client.clear()
-        st.success("Cleared cached Google connections. Reloading…")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Could not clear caches: {e}")
-
-
-
+                if removed:
+                    st.success(f"Deleted: {', '.join(removed)}")
+                    st.rerun()
+                else:
+                    st.info("No conflict tabs found.")
+        with colm2:
+            if st.button("♻️ Reset Google connection (clears cache)"):
+                try:
+                    _get_spreadsheet.clear()
+                    _gs_client.clear()
+                    st.success("Cleared cached Google connections. Reloading…")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not clear caches: {e}")
 
     # --- Looker Studio ---
     with tab5:
@@ -660,7 +678,6 @@ def manager_dashboard(actor_display):
     df = load_orders_df_cached()
     if df.empty:
         st.info("No reports yet.")
-    # Filters (with preset apply)
     preset = st.session_state.pop("preset_applied", None)
     c1, c2, c3, c4, c5 = st.columns(5)
     users   = ["(All)"] + sorted(df["User"].dropna().unique().tolist())
@@ -677,7 +694,6 @@ def manager_dashboard(actor_display):
     sel_from = c4.date_input("From (Timestamp)", value=None if not from_raw else pd.to_datetime(from_raw).date())
     sel_to   = c5.date_input("To (Timestamp)",   value=None if not to_raw else pd.to_datetime(to_raw).date())
 
-    # Apply filters
     f = df.copy()
     if sel_user != "(All)":   f = f[f["User"] == sel_user]
     if sel_client != "(All)": f = f[f["Client"] == sel_client]
@@ -685,7 +701,6 @@ def manager_dashboard(actor_display):
     if sel_from: f = f[pd.to_datetime(f["Timestamp"], errors="coerce") >= pd.to_datetime(sel_from)]
     if sel_to:   f = f[pd.to_datetime(f["Timestamp"], errors="coerce") <= pd.to_datetime(sel_to) + pd.Timedelta(days=1)]
 
-    # KPIs
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Orders", f"{len(f):,}")
     k2.metric("Total Amount", f"${f['Amount'].sum():,.2f}")
@@ -713,7 +728,6 @@ def manager_dashboard(actor_display):
 # --------------------------- Auth + Router ----------------------
 def render_login(dynamic_users: pd.DataFrame):
     st.sidebar.header("Login")
-    # Only active users
     active = dynamic_users[dynamic_users["Active"].astype(str).str.upper().isin(["TRUE","1","YES","Y"])]
     usernames = active["Username"].tolist()
     if not usernames:
@@ -729,11 +743,6 @@ def render_login(dynamic_users: pd.DataFrame):
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
-            # after verifying `user` and `rec` (the user record) and before rendering pages:
-if not st.session_state.get("sheets_inited_once"):
-    init_all_sheets()
-    st.session_state["sheets_inited_once"] = True
-
 
 def render_logout_panel(display_name):
     st.sidebar.success(f"Logged in as {display_name}")
@@ -744,28 +753,29 @@ def render_logout_panel(display_name):
         st.rerun()
 
 def main_router():
-    init_all_sheets()  # ensure tabs exist
     cookies = cookie_manager.get_all()
 
-    # Handle logout cycle
+    # Logout cycle
     if st.session_state.get(POST_LOGOUT_FLAG):
         if cookies and cookies.get(COOKIE_NAME):
             clear_cookie(); st.info("Logging out…"); st.stop()
         st.session_state.pop(POST_LOGOUT_FLAG, None)
         render_login(get_active_users()); st.stop()
 
-    # Fresh session token → route immediately and set cookie if needed
+    # Fresh session token → route immediately; init sheets once; set cookie opportunistically
     sess_token = st.session_state.get(SESSION_TOKEN_KEY)
     if sess_token:
         user = verify_token(sess_token)
         if user:
-            # Check user still active
             rec = get_user_record(user["username"])
             if not rec or not rec["Active"]:
                 st.warning("Your account is inactive. Contact admin.")
                 st.session_state.pop(SESSION_TOKEN_KEY, None)
                 clear_cookie()
                 render_login(get_active_users()); st.stop()
+            if not st.session_state.get("sheets_inited_once"):
+                init_all_sheets()
+                st.session_state["sheets_inited_once"] = True
             if cookies is not None and not cookies.get(COOKIE_NAME):
                 set_cookie(sess_token)
             render_logout_panel(user["name"])
@@ -775,7 +785,7 @@ def main_router():
                 team_reporter(user["name"])
             return
 
-    # Returning visit → use cookie
+    # Returning visit → cookie
     if cookies is None: st.stop()
     token_from_cookie = cookies.get(COOKIE_NAME)
     user = verify_token(token_from_cookie) if token_from_cookie else None
@@ -785,6 +795,9 @@ def main_router():
             st.warning("Your account is inactive. Contact admin.")
             clear_cookie()
             render_login(get_active_users()); st.stop()
+        if not st.session_state.get("sheets_inited_once"):
+            init_all_sheets()
+            st.session_state["sheets_inited_once"] = True
         render_logout_panel(user["name"])
         if rec["Role"] == "admin":
             manager_dashboard(user["name"])
@@ -799,8 +812,3 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
-
-
-
-
-
