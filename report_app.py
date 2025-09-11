@@ -591,6 +591,18 @@ def admin_tools(actor_display):
                 log_audit(actor_display, "UPDATE_USER", USERS_SHEET, row["SheetRow"], "-", None, {"Username":row["Username"]})
                 st.success("User updated.")
                 st.rerun()
+            st.divider()
+            st.markdown("**Maintenance**")
+            if st.button("🧹 Remove *_conflict* tabs"):
+                removed = cleanup_conflict_tabs()
+            if removed:
+                st.success(f"Deleted: {', '.join(removed)}")
+                st.rerun()
+            else:
+                st.info("No conflict tabs found.")
+
+
+
 
     # --- Looker Studio ---
     with tab5:
@@ -687,38 +699,6 @@ def render_logout_panel(display_name):
         st.rerun()
 
 def main_router():
-    import gspread
-from gspread.exceptions import APIError
-
-def debug_google_access():
-    st.sidebar.markdown("### 🧪 Google Access Debug")
-    # Show which service account we are actually using
-    try:
-        svc = _load_service_account_from_secrets()
-        st.sidebar.write("Service account:", svc.get("client_email", "(missing)"))
-    except Exception as e:
-        st.sidebar.error(f"Could not read st.secrets['gcp_service_account']: {e}")
-        return
-
-    st.sidebar.write("SHEET_ID:", SHEET_ID)
-
-    # Try to open the sheet
-    try:
-        gc = _gs_client()
-        sh = gc.open_by_key(SHEET_ID)
-        st.sidebar.success(f"Connected to: {sh.title}")
-        st.sidebar.write("Worksheets:", [ws.title for ws in sh.worksheets()])
-    except APIError as e:
-        code = getattr(getattr(e, "response", None), "status_code", "n/a")
-        try:
-            msg = e.response.json().get("error", {}).get("message")
-        except Exception:
-            msg = str(e)
-        st.sidebar.error(f"APIError HTTP {code}: {msg}")
-        st.sidebar.caption("Most common fixes: share the Sheet with the service account as Editor; check SHEET_ID; ensure secrets JSON matches the active key.")
-    except Exception as ex:
-        st.sidebar.error(f"Unexpected error: {ex}")
-
     init_all_sheets()  # ensure tabs exist
     cookies = cookie_manager.get_all()
 
@@ -774,5 +754,5 @@ def debug_google_access():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
-    debug_google_access()
+
 
