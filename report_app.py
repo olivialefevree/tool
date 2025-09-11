@@ -720,6 +720,11 @@ def render_login(dynamic_users: pd.DataFrame):
             st.rerun()
         else:
             st.sidebar.error("Invalid username or password")
+            # after verifying `user` and `rec` (the user record) and before rendering pages:
+if not st.session_state.get("sheets_inited_once"):
+    init_all_sheets()
+    st.session_state["sheets_inited_once"] = True
+
 
 def render_logout_panel(display_name):
     st.sidebar.success(f"Logged in as {display_name}")
@@ -785,6 +790,7 @@ def main_router():
 if __name__ == "__main__":
     st.title(APP_TITLE)
     main_router()
+
 
 
 
